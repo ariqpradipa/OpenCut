@@ -1,0 +1,186 @@
+name: Docker Build and Publish
+
+on:
+  push:
+    branches:
+      - docker-build
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "Dockerfile"
+      - "docker-compose.yaml"
+      - ".github/workflows/docker-build-publish.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Custom tag for the Docker image"
+        required: false
+        default: ""
+      push_to_registry:
+        description: "Push to registry"
+        required: false
+        default: true
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'workflow_dispatch' || inputs.push_to_registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from package.json
+        id: package-version
+        run: |
+          VERSION=$(cat apps/web/package.json | jq -r '.version')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Generate metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Branch event
+            type=ref,event=branch
+            # Tag event
+            type=ref,event=tag
+            # PR event
+            type=ref,event=pr
+            # Set latest tag for docker-build branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/docker-build' }}
+            # Version from package.json
+            type=raw,value=v${{ steps.package-version.outputs.version }}
+            # Short SHA
+            type=sha,prefix=sha-
+            # Custom tag from workflow_dispatch
+            type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
+          labels: |
+            org.opencontainers.image.title=OpenCut
+            org.opencontainers.image.description=Free and open-source video editor
+            org.opencontainers.image.vendor=OpenCut
+            org.opencontainers.image.version=${{ steps.package-version.outputs.version }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./apps/web/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_to_registry }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NODE_ENV=production
+            NEXT_TELEMETRY_DISABLED=1
+
+      - name: Generate artifact attestation
+        if: github.event_name != 'workflow_dispatch' || inputs.push_to_registry
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build-and-publish
+    if: github.event_name != 'workflow_dispatch' || inputs.push_to_registry
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: "sarif"
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+  deploy-notification:
+    runs-on: ubuntu-latest
+    needs: [build-and-publish, security-scan]
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.push_to_registry)
+
+    steps:
+      - name: Create deployment summary
+        run: |
+          echo "## 🐳 Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Image Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags**: Available at [packages page](https://github.com/${{ github.repository }}/pkgs/container/${{ github.event.repository.name }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Quick Usage" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### � Docker Run with Environment Variables" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -p 3000:3000 \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e DATABASE_URL=\"postgresql://user:pass@host:5432/opencut\" \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e BETTER_AUTH_SECRET=\"your-secret-key\" \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e NEXT_PUBLIC_BETTER_AUTH_URL=\"http://localhost:3000\" \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e UPSTASH_REDIS_REST_URL=\"http://localhost:8079\" \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e UPSTASH_REDIS_REST_TOKEN=\"your-token\" \\" >> $GITHUB_STEP_SUMMARY
+          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### �🔄 Docker Compose with Full Stack" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+          echo "services:" >> $GITHUB_STEP_SUMMARY
+          echo "  db:" >> $GITHUB_STEP_SUMMARY
+          echo "    image: postgres:17" >> $GITHUB_STEP_SUMMARY
+          echo "    environment:" >> $GITHUB_STEP_SUMMARY
+          echo "      POSTGRES_USER: opencut" >> $GITHUB_STEP_SUMMARY
+          echo "      POSTGRES_PASSWORD: your-password" >> $GITHUB_STEP_SUMMARY
+          echo "      POSTGRES_DB: opencut" >> $GITHUB_STEP_SUMMARY
+          echo "  web:" >> $GITHUB_STEP_SUMMARY
+          echo "    image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "    ports:" >> $GITHUB_STEP_SUMMARY
+          echo "      - \"3000:3000\"" >> $GITHUB_STEP_SUMMARY
+          echo "    environment:" >> $GITHUB_STEP_SUMMARY
+          echo "      - DATABASE_URL=postgresql://opencut:your-password@db:5432/opencut" >> $GITHUB_STEP_SUMMARY
+          echo "      - BETTER_AUTH_SECRET=your-secret-key" >> $GITHUB_STEP_SUMMARY
+          echo "      - NEXT_PUBLIC_BETTER_AUTH_URL=http://localhost:3000" >> $GITHUB_STEP_SUMMARY
+          echo "    depends_on:" >> $GITHUB_STEP_SUMMARY
+          echo "      - db" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📖 **Full documentation**: [Docker Deployment Guide](https://github.com/${{ github.repository }}/blob/main/docs/docker-deployment.md)" >> $GITHUB_STEP_SUMMARY

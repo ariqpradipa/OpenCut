@@ -142,6 +142,118 @@ Before you begin, ensure you have the following installed on your system:
 
 The application will be available at [http://localhost:3000](http://localhost:3000).
 
+## 🐳 Docker Deployment
+
+OpenCut provides multiple Docker deployment options for different environments.
+
+### Quick Start with Published Images
+
+Use our pre-built images from GitHub Container Registry:
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/ariqpradipa/opencut:latest
+
+# Run standalone (without database)
+docker run -p 3000:3000 ghcr.io/ariqpradipa/opencut:latest
+
+# Or use docker-compose with published image
+docker-compose -f docker-compose.prod.yaml up -d
+```
+
+### Docker Management Script
+
+Use our convenient management script for common Docker operations:
+
+```bash
+# Make script executable (first time only)
+chmod +x scripts/docker-manage.sh
+
+# Create environment file from template
+./scripts/docker-manage.sh create-env
+
+# Pull latest image
+./scripts/docker-manage.sh pull
+
+# Start with published image (includes database & Redis)
+./scripts/docker-manage.sh start-prod
+
+# Start with custom environment file
+./scripts/docker-manage.sh start-prod latest .env.production
+
+# Start with local build
+./scripts/docker-manage.sh start-dev
+
+# View logs
+./scripts/docker-manage.sh logs
+
+# Update to latest version
+./scripts/docker-manage.sh update
+
+# See all available commands
+./scripts/docker-manage.sh help
+```
+
+### Environment Configuration
+
+OpenCut Docker images support comprehensive environment variable configuration:
+
+**Required Variables:**
+
+- `DATABASE_URL` - PostgreSQL connection string
+- `BETTER_AUTH_SECRET` - Authentication secret (generate with `openssl rand -base64 32`)
+- `NEXT_PUBLIC_BETTER_AUTH_URL` - Public URL for authentication
+- `UPSTASH_REDIS_REST_URL` - Redis connection URL
+- `UPSTASH_REDIS_REST_TOKEN` - Redis authentication token
+
+**Quick Setup:**
+
+```bash
+# Create environment file from template
+./scripts/docker-manage.sh create-env
+# Edit .env.docker with your values, then:
+./scripts/docker-manage.sh start-prod
+```
+
+### Environment Configuration
+
+OpenCut Docker images support comprehensive environment variable configuration:
+
+**Required Variables:**
+
+- `DATABASE_URL` - PostgreSQL connection string
+- `BETTER_AUTH_SECRET` - Authentication secret (generate with `openssl rand -base64 32`)
+- `NEXT_PUBLIC_BETTER_AUTH_URL` - Public URL for authentication
+- `UPSTASH_REDIS_REST_URL` - Redis connection URL
+- `UPSTASH_REDIS_REST_TOKEN` - Redis authentication token
+
+**Quick Setup:**
+
+```bash
+# Create environment file from template
+cp .env.docker.template .env.docker
+# Edit with your values, then:
+docker-compose --env-file .env.docker -f docker-compose.prod.yaml up -d
+```
+
+### Available Image Tags
+
+- `latest` - Latest build from the docker-build branch
+- `v{version}` - Specific versions (e.g., `v0.1.0`)
+- `sha-{commit}` - Specific commit builds
+- `docker-build` - Development branch builds
+
+### Production Deployment
+
+For production environments:
+
+1. Use specific version tags instead of `latest`
+2. Configure proper environment variables
+3. Set up SSL/TLS termination
+4. Configure monitoring and logging
+
+See our [Docker Deployment Guide](docs/docker-deployment.md) for comprehensive instructions, security best practices, and troubleshooting tips.
+
 ## Contributing
 
 We welcome contributions! While we're actively developing and refactoring certain areas, there are plenty of opportunities to contribute effectively.
