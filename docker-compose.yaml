@@ -3,13 +3,13 @@ services:
     image: postgres:17
     restart: unless-stopped
     environment:
-      POSTGRES_USER: opencut
-      POSTGRES_PASSWORD: opencutthegoat
-      POSTGRES_DB: opencut
+      - POSTGRES_USER=${POSTGRES_USER:-opencut}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-opencutthegoat}
+      - POSTGRES_DB=${POSTGRES_DB:-opencut}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+      - "${POSTGRES_DATA_VOLUME:-postgres_data}:/var/lib/postgresql/data"
+    # ports:
+    #   - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U opencut"]
       interval: 30s
@@ -20,8 +20,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # ports:
+    #   - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -31,12 +31,12 @@ services:
 
   serverless-redis-http:
     image: hiett/serverless-redis-http:latest
-    ports:
-      - "8079:80"
+    # ports:
+    #   - "8079:80"
     environment:
-      SRH_MODE: env
-      SRH_TOKEN: example_token
-      SRH_CONNECTION_STRING: "redis://redis:6379"
+      - SRH_MODE=${SRH_MODE:-env}
+      - SRH_TOKEN=${SRH_TOKEN:-example_token}
+      - SRH_CONNECTION_STRING=${SRH_CONNECTION_STRING:-redis://redis:6379}
     depends_on:
       redis:
         condition: service_healthy
@@ -46,20 +46,21 @@ services:
       timeout: 10s
       retries: 5
       start_period: 10s
+
   web:
     build:
       context: .
       dockerfile: ./apps/web/Dockerfile
     restart: unless-stopped
-    ports:
-      - "3100:3000" # app is running on 3000 so we run this at 3100
+    # ports:
+    #   - "3100:3000" # app is running on 3000 so we run this at 3100
     environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://opencut:opencutthegoat@db:5432/opencut
+      - NODE_ENV=${NODE_ENV:-production}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-opencut}:${POSTGRES_PASSWORD:-opencutthegoat}@db:5432/${POSTGRES_DB:-opencut}
       - BETTER_AUTH_URL=http://localhost:3000
-      - BETTER_AUTH_SECRET=your-production-secret-key-here
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-example_secret}
       - UPSTASH_REDIS_REST_URL=http://serverless-redis-http:80
-      - UPSTASH_REDIS_REST_TOKEN=example_token
+      - UPSTASH_REDIS_REST_TOKEN=${SRH_TOKEN:-example_token}
     depends_on:
       db:
         condition: service_healthy
@@ -71,10 +72,3 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
-  
-volumes:  
-  postgres_data:
-
-networks:  
-  default:  
-    name: opencut-network
